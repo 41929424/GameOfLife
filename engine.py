@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import random
+from typing import Literal
+
+from history import StateHistory
 
 Field = list[list[bool]]
+AnalysisStatus = Literal["evolving", "stable", "oscillating"]
 
 
 def _validate_dimensions(width: int, height: int) -> None:
@@ -47,13 +51,24 @@ def next_generation(field: Field) -> Field:
 class GameEngine:
     """Own the game field and generation counter, without UI dependencies."""
 
-    def __init__(self, width: int, height: int | None = None, density: float = 0.28) -> None:
+    def __init__(
+        self,
+        width: int,
+        height: int | None = None,
+        density: float = 0.28,
+        history_limit: int = 1000,
+    ) -> None:
         height = width if height is None else height
         _validate_dimensions(width, height)
         self.width = width
         self.height = height
         self._field = make_field(width, height, density)
         self.generation = 0
+        self._history = StateHistory(history_limit)
+        self._status: AnalysisStatus = "evolving"
+        self._cycle_period: int | None = None
+        self._cycle_start: int | None = None
+        self._history.record(self._field, self.generation)
 
     def get_field(self) -> Field:
         """Return a copy so callers cannot mutate the engine's internal state."""
@@ -71,17 +86,50 @@ class GameEngine:
     def is_empty(self) -> bool:
         return self.population == 0
 
+    @property
+    def status(self) -> AnalysisStatus:
+        return self._status
+
+    @property
+    def cycle_period(self) -> int | None:
+        return self._cycle_period
+
+    @property
+    def cycle_start(self) -> int | None:
+        return self._cycle_start
+
+    @property
+    def history_size(self) -> int:
+        return self._history.size
+
+    def _reset_history(self) -> None:
+        self._history.clear()
+        self.generation = 0
+        self._status = "evolving"
+        self._cycle_period = None
+        self._cycle_start = None
+        self._history.record(self._field, self.generation)
+
     def step(self) -> None:
         self._field = next_generation(self._field)
         self.generation += 1
+        period = self._history.record(self._field, self.generation)
+        if period is None:
+            self._status = "evolving"
+            self._cycle_period = None
+            self._cycle_start = None
+        else:
+            self._status = "stable" if period == 1 else "oscillating"
+            self._cycle_period = period
+            self._cycle_start = self.generation - period
 
     def randomize(self, density: float = 0.28) -> None:
         self._field = make_field(self.width, self.height, density)
-        self.generation = 0
+        self._reset_history()
 
     def clear(self) -> None:
         self._field = [[False] * self.width for _ in range(self.height)]
-        self.generation = 0
+        self._reset_history()
 
     def resize(self, width: int, height: int) -> None:
         _validate_dimensions(width, height)
@@ -92,7 +140,7 @@ class GameEngine:
         self.width = width
         self.height = height
         self._field = resized
-        self.generation = 0
+        self._reset_history()
 
     def set_cell(self, x: int, y: int, alive: bool) -> None:
         if (isinstance(x, bool) or not isinstance(x, int) or
@@ -102,4 +150,4 @@ class GameEngine:
         alive = bool(alive)
         if self._field[y][x] != alive:
             self._field[y][x] = alive
-            self.generation = 0
+            self._reset_history()

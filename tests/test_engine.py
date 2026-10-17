@@ -10,6 +10,115 @@ def test_creation_and_random_field_dimensions():
     assert make_field(3, density=1) == [[True] * 3 for _ in range(3)]
 
 
+def make_block_engine(history_limit=1000):
+    engine = GameEngine(4, 4, density=0, history_limit=history_limit)
+    for x, y in ((1, 1), (2, 1), (1, 2), (2, 2)):
+        engine.set_cell(x, y, True)
+    return engine
+
+
+def test_analysis_starts_evolving_with_initial_state_in_history():
+    engine = GameEngine(4, 4, density=0)
+    assert engine.status == "evolving"
+    assert engine.cycle_period is None
+    assert engine.cycle_start is None
+    assert engine.history_size == 1
+
+
+def test_block_is_stable_with_period_one_and_correct_cycle_start():
+    engine = make_block_engine()
+    engine.step()
+    assert engine.status == "stable"
+    assert engine.cycle_period == 1
+    assert engine.cycle_start == 0
+
+
+def test_blinker_is_oscillating_with_period_two():
+    engine = GameEngine(5, 5, density=0)
+    for x in (1, 2, 3):
+        engine.set_cell(x, 2, True)
+    engine.step()
+    assert engine.status == "evolving"
+    engine.step()
+    assert engine.status == "oscillating"
+    assert engine.cycle_period == 2
+    assert engine.cycle_start == 0
+
+
+def test_empty_field_is_stable():
+    engine = GameEngine(3, 3, density=0)
+    engine.step()
+    assert engine.status == "stable"
+    assert engine.cycle_period == 1
+    assert engine.cycle_start == 0
+
+
+def test_analysis_continues_after_cycle_and_updates_cycle_start():
+    engine = make_block_engine()
+    engine.step()
+    engine.step()
+    assert (engine.status, engine.cycle_period, engine.cycle_start) == ("stable", 1, 1)
+    assert engine.generation == 2
+    assert engine.history_size == 3
+
+
+def test_history_limit_can_hide_a_longer_cycle():
+    engine = GameEngine(5, 5, density=0, history_limit=1)
+    for x in (1, 2, 3):
+        engine.set_cell(x, 2, True)
+    engine.step()
+    engine.step()
+    assert engine.history_size == 1
+    assert engine.status == "evolving"
+    assert engine.cycle_period is None
+    assert engine.cycle_start is None
+
+
+@pytest.mark.parametrize("operation", ["randomize", "clear", "resize", "set_cell"])
+def test_configuration_changes_reset_analysis_and_register_generation_zero(operation):
+    engine = make_block_engine()
+    engine.step()
+    assert engine.status == "stable"
+
+    if operation == "randomize":
+        engine.randomize(density=0)
+    elif operation == "clear":
+        engine.clear()
+    elif operation == "resize":
+        engine.resize(5, 5)
+    else:
+        engine.set_cell(1, 1, False)
+
+    assert engine.generation == 0
+    assert engine.status == "evolving"
+    assert engine.cycle_period is None
+    assert engine.cycle_start is None
+    assert engine.history_size == 1
+
+
+def test_setting_existing_cell_value_does_not_reset_analysis():
+    engine = make_block_engine()
+    engine.step()
+    engine.set_cell(1, 1, True)
+    assert engine.generation == 1
+    assert engine.status == "stable"
+    assert engine.cycle_period == 1
+    assert engine.cycle_start == 0
+    assert engine.history_size == 2
+
+
+def test_analysis_properties_are_read_only():
+    engine = GameEngine(2, 2, density=0)
+    with pytest.raises(AttributeError):
+        engine.status = "stable"
+    with pytest.raises(AttributeError):
+        engine.cycle_period = 1
+    with pytest.raises(AttributeError):
+        engine.cycle_start = 0
+    with pytest.raises(AttributeError):
+        engine.history_size = 1
+
+
 @pytest.mark.parametrize("width,height", [(0, 2), (2, 0), (-1, 2), (2, 1.5)])
 def test_invalid_dimensions_are_rejected(width, height):
     with pytest.raises(ValueError):
