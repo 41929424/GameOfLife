@@ -10,8 +10,10 @@ from datetime import datetime
 from PIL import Image
 from rich.text import Text
 from engine import GameEngine
+from textual import events
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.geometry import Size
 from textual.theme import Theme
 from textual.widgets import Button, Footer, Header, Input, Label, Select, Static
 
@@ -81,9 +83,22 @@ class GameOfLifeApp(App[None]):
     CSS = """
     Screen { background: $background; color: $foreground; }
     #main { height: 1fr; min-height: 0; padding: 1 2; }
-    #top { height: 6; margin-bottom: 1; }
-    #stats { width: 1fr; height: 6; border: round $surface; padding: 0 1; background: $panel; }
+    #top { height: 9; margin-bottom: 1; }
+    #stats { width: 1fr; height: 9; border: round $surface; padding: 0 1; background: $panel; }
     #stats Label { height: 1; }
+    #top.compact { height: 6; }
+    #stats.compact {
+        layout: grid;
+        grid-size: 2 4;
+        grid-columns: 1fr 1fr;
+        grid-rows: 1fr 1fr 1fr 1fr;
+        grid-gutter: 0 1;
+        height: 6;
+    }
+    #stats.compact Label { width: 1fr; }
+    #side.compact .card { padding: 0; }
+    #side.compact .card-title { margin-bottom: 0; }
+    #side.compact #controls Button { margin-bottom: 0; }
     #workspace { height: 1fr; min-height: 0; }
     #grid-wrap { width: 1fr; height: 1fr; min-height: 0; border: round $surface; align: center middle; overflow: auto; }
     #grid { width: auto; height: auto; padding: 1 2; }
@@ -127,6 +142,9 @@ class GameOfLifeApp(App[None]):
                     yield Label("POPULATION   0", id="population")
                     yield Label("STATUS       Running", id="status")
                     yield Label("SPEED        0.35 s / step", id="speed")
+                    yield Label("STATE        Evolving", id="state-status")
+                    yield Label("PERIOD       —", id="cycle-period")
+                    yield Label("CYCLE START  —", id="cycle-start")
             with Horizontal(id="workspace"):
                 with Vertical(id="grid-wrap"):
                     yield LifeGrid(id="grid")
@@ -163,6 +181,7 @@ class GameOfLifeApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        self._update_responsive_layout(self.size)
         for theme in THEMES.values():
             self.register_theme(theme)
         try:
@@ -175,6 +194,17 @@ class GameOfLifeApp(App[None]):
         self.timer = self.set_interval(self.interval, self.tick)
         self.refresh_view()
         self.call_after_refresh(self.warn_if_board_exceeds_view)
+
+    def on_resize(self, event: events.Resize) -> None:
+        self._update_responsive_layout(event.size)
+        if self.is_mounted:
+            self.refresh_view()
+
+    def _update_responsive_layout(self, size: Size) -> None:
+        compact = size.width < 65 or size.height < 20
+        self.query_one("#top", Horizontal).set_class(compact, "compact")
+        self.query_one("#stats", Vertical).set_class(compact, "compact")
+        self.query_one("#side", Vertical).set_class(compact, "compact")
 
     def tick(self) -> None:
         if self.running:
@@ -194,10 +224,6 @@ class GameOfLifeApp(App[None]):
         self.refresh_view()
         if not self.running:
             return
-        if self.engine.is_empty:
-            self.running = False
-            self.query_one("#message", Label).update("All cells are dead. Randomize to start again.")
-            self.refresh_view()
 
     def refresh_view(self) -> None:
         field = self.engine.get_field()
@@ -205,12 +231,41 @@ class GameOfLifeApp(App[None]):
         self.query_one("#grid", LifeGrid).show_field(
             field, colors["grid-live"], colors["grid-dead"]
         )
-        self.query_one("#generation", Label).update(f"GENERATION   {self.engine.generation:,}")
-        self.query_one("#population", Label).update(
-            f"POPULATION   {self.engine.population:,} / {self.engine.width * self.engine.height:,}"
+        compact = self.query_one("#stats", Vertical).has_class("compact")
+        if compact:
+            self.query_one("#generation", Label).update(f"GENERATION {self.engine.generation:,}")
+            self.query_one("#population", Label).update(
+                f"POPULATION {self.engine.population:,}/{self.engine.width * self.engine.height:,}"
+            )
+            self.query_one("#status", Label).update(
+                f"STATUS {'Running' if self.running else 'Paused'}"
+            )
+            self.query_one("#speed", Label).update(f"SPEED {self.interval:.2f}s/step")
+        else:
+            self.query_one("#generation", Label).update(f"GENERATION   {self.engine.generation:,}")
+            self.query_one("#population", Label).update(
+                f"POPULATION   {self.engine.population:,} / {self.engine.width * self.engine.height:,}"
+            )
+            self.query_one("#status", Label).update(f"STATUS       {'Running' if self.running else 'Paused'}")
+            self.query_one("#speed", Label).update(f"SPEED        {self.interval:.2f} s / step")
+        state_labels = {
+            "evolving": "Evolving",
+            "stable": "Stable",
+            "oscillating": "Oscillator",
+        }
+        state = self.engine.status
+        state_prefix = "STATE " if compact else "STATE        "
+        self.query_one("#state-status", Label).update(
+            f"{state_prefix}{state_labels[state]}"
         )
-        self.query_one("#status", Label).update(f"STATUS       {'Running' if self.running else 'Paused'}")
-        self.query_one("#speed", Label).update(f"SPEED        {self.interval:.2f} s / step")
+        period = "—" if state == "evolving" else str(self.engine.cycle_period)
+        cycle_start = "—" if state == "evolving" else str(self.engine.cycle_start)
+        if compact:
+            self.query_one("#cycle-period", Label).update(f"PERIOD {period}")
+            self.query_one("#cycle-start", Label).update(f"CYCLE START {cycle_start}")
+        else:
+            self.query_one("#cycle-period", Label).update(f"PERIOD       {period}")
+            self.query_one("#cycle-start", Label).update(f"CYCLE START  {cycle_start}")
         self.query_one("#pause", Button).label = "⏸  Pause" if self.running else "▶  Resume"
         self.query_one("#record-status", Label).update(
             f"Recording · {len(self.recording_frames)} frames" if self.recording else "Recorder idle"
